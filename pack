@@ -1,0 +1,50 @@
+#!/bin/bash
+set -eu -o pipefail
+if ! which runc > /dev/null; then
+  echo "runc not found in path" >&2
+  exit 1
+fi
+
+BIND_MOUNTS=()
+while getopts "v:o:h" opt; do
+  case $opt in
+    v)
+      BIND_MOUNTS+=($OPTARG)
+      ;;
+    o)
+      OUTPUT="$OPTARG"
+      ;;
+    ?)
+      echo "Invalid option -$OPTARG" >&2
+      exit 1
+      ;;
+  esac
+done
+shift $((OPTIND-1))
+
+
+if [ $# -lt 1 ]; then
+  echo "$0 [flags] image" >&2
+  exit 1
+fi
+IMAGE=$1
+[ -z "${OUTPUT-}" ] && OUTPUT=$(echo "$IMAGE" | tr '/' '_')
+
+ID=$(docker run --entrypoint /bin/true -d "$IMAGE" -)
+
+TMP=$(mktemp -d /tmp/runc_XXXXXXXXXX)
+mkdir "$TMP/rootfs"
+echo "Creating tarball for $IMAGE from $ID"
+docker export "$ID" | tar -C "$TMP/rootfs" -xf -
+docker rm "$ID"
+cp "$(which runc)" "$TMP"
+
+echo "Writing $OUTPUT"
+"$(dirname $0)/inspect2containerjson" "$IMAGE" ${BIND_MOUNTS[*]} > "$TMP/container.json"
+(
+  cat files/extract
+  tar -czf - -C "$TMP" .
+) > "$OUTPUT"
+
+rm -rf "$TMP"
+chmod a+x "$OUTPUT"
